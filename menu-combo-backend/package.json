@@ -2,8 +2,23 @@
   "name": "menu-combo-backend",
   "version": "1.0.0",
   "description": "",
+  "type": "module",
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.932.0",
+    "@aws-sdk/client-s3": "^3.928.0",
+    "@aws-sdk/client-secrets-manager": "^3.928.0",
+    "@aws-sdk/client-sqs": "^3.932.0",
+    "@aws-sdk/client-textract": "^3.932.0",
+    "cors": "^2.8.5",
     "express": "^4.19.2",
+    "express-fileupload": "^1.5.2",
+    "jsonwebtoken": "^9.0.2",
+    "jwks-rsa": "^3.2.0",
+    "pg": "^8.16.3",
     "serverless-http": "^3.2.0"
+  },
+  "devDependencies": {
+    "serverless-domain-manager": "^8.0.0",
+    "serverless-offline": "^14.4.0"
   }
 }
