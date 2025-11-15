@@ -48,7 +48,7 @@ function useUploadPolling(uploadId: string | null) {
           `${import.meta.env.VITE_API_BASE}/uploads/${uploadId}`,
           {
             headers: {
-              'Authorization': `Bearer ${auth.user.access_token}`
+              'Authorization': `Bearer ${auth.user?.access_token}`
             }
           }
         );
