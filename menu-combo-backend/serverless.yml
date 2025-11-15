@@ -1,19 +1,124 @@
-# "org" ensures this Service is used with the correct Serverless Framework Access Key.
 org: peiwen
-# "app" enables Serverless Framework Dashboard features and sharing them with other Services.
 app: menu-combo
-# "service" is the name of this project. This will also be added to your AWS resource names.
 service: menu-combo-backend
+
+plugins:
+  - serverless-offline
 
 provider:
   name: aws
   runtime: nodejs20.x
-  # Uncomment to easily set up a custom domain. Read the docs for more details:
-  # https://www.serverless.com/framework/docs/providers/aws/guide/domains
-  # domain: api.example.com
+  region: us-east-1
+  timeout: 30
+  memorySize: 1024
+  environment:
+    BUCKET_NAME: menu-combo-uploads
+    DB_SECRET_ARN: arn:aws:secretsmanager:us-east-1:024848456604:secret:menu-db-dZh6zJ
+    CLAUDE_API_KEY: arn:aws:secretsmanager:us-east-1:024848456604:secret:menu-claude-api-key-PtNVh4
+    SQS_QUEUE_URL: !Ref MenuOcrQueue
+  httpApi:
+    cors:
+      allowedOrigins:
+        - https://menu-combo.peiwen.dev
+        - http://localhost:5173
+      allowedHeaders:
+        - Content-Type
+        - Authorization
+      allowedMethods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allowCredentials: true
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:PutObject
+          Resource: arn:aws:s3:::menu-combo-uploads/*
+
+        - Effect: Allow
+          Action:
+            - secretsmanager:GetSecretValue
+          Resource:
+            - arn:aws:secretsmanager:us-east-1:024848456604:secret:menu-db-*
+            - arn:aws:secretsmanager:us-east-1:024848456604:secret:menu-claude-api-key-*
+
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+          Resource: !GetAtt MenuOcrQueue.Arn
+
+        - Effect: Allow
+          Action:
+            - textract:DetectDocumentText
+          Resource: '*'
+
+        - Effect: Allow
+          Action:
+            - bedrock:InvokeModel
+          Resource: arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0
 
 functions:
   api:
     handler: handler.handler
     events:
-      - httpApi: "*"
+      - httpApi:
+          path: /
+          method: ANY
+      - httpApi:
+          path: /{proxy+}
+          method: ANY
+    timeout: 30
+
+  ocrWorker:
+    handler: ocrWorker.handler
+    timeout: 300  # 5 minutes
+    memorySize: 2048  # More memory for image processing
+    events:
+      - sqs:
+          arn: !GetAtt MenuOcrQueue.Arn
+          batchSize: 1
+          maximumBatchingWindowInSeconds: 0
+
+resources:
+  Resources:
+    MenuComboUploads:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: menu-combo-uploads
+        CorsConfiguration:
+          CorsRules:
+            - AllowedOrigins:
+                - http://localhost:5173
+                - https://menu-combo.peiwen.dev
+              AllowedMethods:
+                - GET
+                - PUT
+                - POST
+              AllowedHeaders:
+                - '*'
+
+    MenuOcrQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: menu-ocr-queue
+        VisibilityTimeout: 300
+        MessageRetentionPeriod: 86400
+        ReceiveMessageWaitTimeSeconds: 20
+        RedrivePolicy:
+          deadLetterTargetArn: !GetAtt MenuOcrDLQ.Arn
+          maxReceiveCount: 3
+
+    MenuOcrDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: menu-ocr-dlq
+        MessageRetentionPeriod: 1209600
+
