@@ -7,7 +7,7 @@ import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-sec
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import pkg from "pg";
 import { verifyToken } from "./middleware/auth.js";
-import { initializeDatabase, upsertUser, createUpload, getUserUploads } from "./db/index.js";
+import { initializeDatabase, upsertUser, createUpload, getUserUploads, getPool } from "./db/index.js";
 
 const { Client } = pkg;
 const app = express();
@@ -202,6 +202,53 @@ app.get("/uploads", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("Get uploads error:", err);
     res.status(500).json({ error: "Failed to retrieve uploads", details: err.message });
+  }
+});
+
+// --- Get upload status and menu items (Protected) ---
+app.get('/uploads/:uploadId', verifyToken, async (req, res) => {
+  try {
+    const { uploadId } = req.params;
+    const userId = req.user.sub;
+    const pool = await getPool();
+
+    // Get upload info
+    const uploadResult = await pool.query(
+      `SELECT upload_id, file_url, file_name, ocr_status,
+              items_count, ocr_error, created_at, ocr_completed_at,
+              ocr_started_at
+       FROM uploads
+       WHERE upload_id = $1 AND user_id = $2`,
+      [uploadId, userId]
+    );
+
+    if (uploadResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Upload not found' });
+    }
+
+    const upload = uploadResult.rows[0];
+
+    // If completed, get menu items
+    let items = [];
+    if (upload.ocr_status === 'completed') {
+      const itemsResult = await pool.query(
+        `SELECT item_id, item_name, price, description, category,
+                bbox, confidence_score, notes
+         FROM menu_items
+         WHERE upload_id = $1
+         ORDER BY (bbox->>'top')::float`,
+        [uploadId]
+      );
+      items = itemsResult.rows;
+    }
+
+    res.json({
+      upload,
+      items
+    });
+  } catch (error) {
+    console.error('Error fetching upload status:', error);
+    res.status(500).json({ error: 'Failed to fetch upload status' });
   }
 });
 
