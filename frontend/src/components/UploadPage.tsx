@@ -1,15 +1,16 @@
 import { useState, useEffect } from "react";
+import { Button as MovingBorderButton } from "@/components/ui/moving-border";
+import { FileUpload } from "@/components/ui/file-upload";
+import { MultiStepLoader } from "@/components/ui/multi-step-loader";
+import { FocusCards } from "@/components/ui/focus-cards";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { useAuth } from "react-oidc-context";
-
-interface FileWithPreview {
-  file: File;
-  preview: string;
-}
+import { motion } from "framer-motion";
 
 interface Upload {
-  upload_id: string;
+  uploadId: string;
   file_url: string;
   file_name: string;
   ocr_status: 'pending' | 'processing' | 'completed' | 'failed';
@@ -34,83 +35,114 @@ interface MenuItem {
   notes?: string;
 }
 
-function useUploadPolling(uploadId: string | null) {
-  const [upload, setUpload] = useState<Upload | null>(null);
-  const [items, setItems] = useState<MenuItem[]>([]);
+interface UploadPageProps {
+  onBackToHome?: () => void;
+}
+
+function useMultipleUploadsPolling(uploadIds: string[]) {
+  const [uploads, setUploads] = useState<Upload[]>([]);
+  const [allItems, setAllItems] = useState<MenuItem[]>([]);
   const auth = useAuth();
 
   useEffect(() => {
-    if (!uploadId || !auth.user?.access_token) return;
+    if (uploadIds.length === 0 || !auth.user?.access_token) return;
 
-    const fetchStatus = async () => {
+    let isStopped = false;
+
+    const fetchAllStatuses = async () => {
       try {
-        const response = await fetch(
-          `${import.meta.env.VITE_API_BASE}/uploads/${uploadId}`,
-          {
-            headers: {
-              'Authorization': `Bearer ${auth.user?.access_token}`
+        const promises = uploadIds.map(uploadId =>
+          fetch(
+            `${import.meta.env.VITE_API_BASE}/uploads/${uploadId}`,
+            {
+              headers: {
+                'Authorization': `Bearer ${auth.user?.access_token}`
+              }
             }
-          }
+          ).then(r => r.ok ? r.json() : null)
         );
 
-        if (response.ok) {
-          const data = await response.json();
-          setUpload(data.upload);
-          setItems(data.items || []);
+        const results = await Promise.all(promises);
+        const fetchedUploads: Upload[] = [];
+        const fetchedItems: MenuItem[] = [];
+
+        results.forEach(result => {
+          if (result) {
+            fetchedUploads.push(result.upload);
+            if (result.items) {
+              fetchedItems.push(...result.items);
+            }
+          }
+        });
+
+        setUploads(fetchedUploads);
+        setAllItems(fetchedItems);
+
+        const allDone = fetchedUploads.every(
+          u => u.ocr_status === 'completed' || u.ocr_status === 'failed'
+        );
+        if (allDone) {
+          isStopped = true;
         }
       } catch (error) {
-        console.error('Failed to fetch upload status:', error);
+        console.error('Failed to fetch upload statuses:', error);
       }
     };
 
-    // Initial fetch
-    fetchStatus();
+    fetchAllStatuses();
 
-    // Poll every 2 seconds if not completed/failed
     const interval = setInterval(() => {
-      if (upload?.ocr_status === 'completed' || upload?.ocr_status === 'failed') {
+      if (isStopped) {
         clearInterval(interval);
         return;
       }
-      fetchStatus();
+      fetchAllStatuses();
     }, 2000);
 
-    return () => clearInterval(interval);
-  }, [uploadId, auth.user?.access_token, upload?.ocr_status]);
+    return () => {
+      clearInterval(interval);
+      isStopped = true;
+    };
+  }, [JSON.stringify(uploadIds), auth.user?.access_token]);
 
-  return { upload, items };
+  return { uploads, allItems };
 }
 
-const UploadPage: React.FC = () => {
+const loadingStates = [
+  { text: "📤 上傳圖片中..." },
+  { text: "📝 提取文字資訊..." },
+  { text: "🤖 AI 分析菜單內容..." },
+  { text: "✅ 完成！正在整理結果..." }
+];
+
+const UploadPage: React.FC<UploadPageProps> = ({ onBackToHome }) => {
   const auth = useAuth();
-  const [files, setFiles] = useState<FileWithPreview[]>([]);
+  const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [selectedUploadId, setSelectedUploadId] = useState<string | null>(null);
-  const { upload, items } = useUploadPolling(selectedUploadId);
+  const [selectedUploadIds, setSelectedUploadIds] = useState<string[]>([]);
+  const { uploads, allItems } = useMultipleUploadsPolling(selectedUploadIds);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = Array.from(e.target.files || []);
+  const getCurrentLoadingState = (status: string) => {
+    switch (status) {
+      case 'pending':
+        return 0;
+      case 'processing':
+        return 2;
+      case 'completed':
+        return 3;
+      case 'failed':
+        return -1;
+      default:
+        return 0;
+    }
+  };
 
-    if (selectedFiles.length > 5) {
+  const handleFileChange = (newFiles: File[]) => {
+    if (newFiles.length > 5) {
       alert("最多只能選擇 5 張圖片！");
       return;
     }
-
-    const filesWithPreview = selectedFiles.map((file) => ({
-      file,
-      preview: URL.createObjectURL(file),
-    }));
-
-    setFiles(filesWithPreview);
-  };
-
-  const removeFile = (index: number) => {
-    setFiles((prev) => {
-      const newFiles = [...prev];
-      URL.revokeObjectURL(newFiles[index].preview); // Clean up memory
-      newFiles.splice(index, 1);
-      return newFiles;
-    });
+    setFiles(newFiles);
   };
 
   const handleUpload = async () => {
@@ -119,14 +151,12 @@ const UploadPage: React.FC = () => {
       return;
     }
 
-    // Check if user is authenticated
     if (!auth.isAuthenticated || !auth.user?.access_token) {
       alert("請先登入！");
       return;
     }
 
     const baseURL = import.meta.env.VITE_API_BASE;
-
     if (!baseURL) {
       alert("API URL not configured!");
       return;
@@ -136,9 +166,8 @@ const UploadPage: React.FC = () => {
 
     try {
       const formData = new FormData();
-      // Append all files with the same field name "images"
-      files.forEach((fileWithPreview) => {
-        formData.append("images", fileWithPreview.file);
+      files.forEach((file) => {
+        formData.append("images", file);
       });
 
       const res = await fetch(baseURL + "/upload", {
@@ -155,11 +184,10 @@ const UploadPage: React.FC = () => {
       }
 
       const data = await res.json();
-      console.log("✅ Uploaded:", data);
 
-      // If we have successful uploads, track the first one for OCR status
       if (data.uploads && data.uploads.length > 0) {
-        setSelectedUploadId(data.uploads[0].upload_id);
+        const uploadIds = data.uploads.map((u: any) => u.uploadId);
+        setSelectedUploadIds(uploadIds);
       }
 
       alert(
@@ -169,8 +197,6 @@ const UploadPage: React.FC = () => {
         (data.errorCount > 0 ? `失敗: ${data.errorCount} 張` : "")
       );
 
-      // Clear files after successful upload
-      files.forEach((f) => URL.revokeObjectURL(f.preview));
       setFiles([]);
     } catch (err) {
       console.error(err);
@@ -180,142 +206,157 @@ const UploadPage: React.FC = () => {
     }
   };
 
+  const menuCards = allItems.map(item => ({
+    title: item.item_name,
+    description: item.description,
+    price: item.price,
+    category: item.category
+  }));
+
   return (
-    <div className="p-8 font-sans max-w-4xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-4">上傳菜單圖片</h1>
-      <p className="text-gray-600 mb-4">最多可選擇 5 張圖片</p>
+    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-purple-800 to-indigo-900 p-4 sm:p-8">
+      <div className="max-w-6xl mx-auto">
+        {/* Back Button */}
+        {onBackToHome && (
+          <motion.div
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.5 }}
+          >
+            <Button
+              onClick={onBackToHome}
+              variant="outline"
+              className="mb-6 bg-white/10 backdrop-blur-sm border-white/20 text-white hover:bg-white/20"
+            >
+              ← 返回首頁
+            </Button>
+          </motion.div>
+        )}
 
-      <Input
-        type="file"
-        accept="image/*"
-        multiple
-        onChange={handleFileChange}
-        className="mb-4"
-      />
+        {/* Header */}
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6 }}
+          className="text-center mb-12"
+        >
+          <Badge variant="secondary" className="mb-4 bg-white/20 backdrop-blur-sm text-white border-white/30">
+            AI-Powered Menu Upload
+          </Badge>
+          <h1 className="text-5xl md:text-6xl font-bold mb-4 text-white bg-clip-text bg-gradient-to-r from-white to-purple-200">
+            📤 上傳菜單圖片
+          </h1>
+          <p className="text-lg text-purple-200">AI 將自動識別並提取菜單內容</p>
+        </motion.div>
 
-      {files.length > 0 && (
-        <div className="mb-4">
-          <p className="text-sm text-gray-600 mb-2">已選擇 {files.length} 張圖片：</p>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-            {files.map((fileWithPreview, index) => (
-              <div key={index} className="relative group">
-                <img
-                  src={fileWithPreview.preview}
-                  alt={`preview-${index}`}
-                  className="w-full h-40 object-cover rounded-md border-2 border-gray-200"
-                />
-                <div className="absolute top-2 right-2">
-                  <Button
-                    onClick={() => removeFile(index)}
-                    className="bg-red-500 hover:bg-red-600 text-white rounded-full w-8 h-8 p-0"
-                    size="sm"
+        {/* File Upload Section */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.2 }}
+        >
+          <Card className="mb-8 bg-white/10 backdrop-blur-lg border-white/20 shadow-2xl">
+            <CardContent className="pt-6">
+              <FileUpload onChange={handleFileChange} />
+
+              {files.length > 0 && (
+                <div className="mt-6 flex justify-center">
+                  <MovingBorderButton
+                    onClick={handleUpload}
+                    disabled={uploading}
+                    containerClassName="w-full md:w-auto"
+                    className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white"
+                    borderRadius="1rem"
+                    duration={3000}
                   >
-                    ✕
-                  </Button>
+                    {uploading ? (
+                      <span className="flex items-center gap-2">
+                        <span className="animate-spin">⏳</span>
+                        上傳中...
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-2">
+                        📤 上傳 {files.length} 張圖片
+                      </span>
+                    )}
+                  </MovingBorderButton>
                 </div>
-                <p className="text-xs text-gray-600 mt-1 truncate">
-                  {fileWithPreview.file.name}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+              )}
+            </CardContent>
+          </Card>
+        </motion.div>
 
-      <Button
-        onClick={handleUpload}
-        disabled={files.length === 0 || uploading}
-        className="w-full bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-400"
-      >
-        {uploading ? "上傳中..." : `上傳 ${files.length} 張圖片`}
-      </Button>
-
-      {/* OCR Status display */}
-      {upload && (
-        <div className="mt-8 p-6 border-2 rounded-lg shadow-sm bg-white">
-          <h2 className="text-xl font-semibold mb-4">OCR 處理狀態</h2>
-
-          <div className="mb-4">
-            <p className="text-sm text-gray-600">檔案名稱: {upload.file_name}</p>
-          </div>
-
-          {upload.ocr_status === 'pending' && (
-            <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-md">
-              <p className="text-yellow-700 font-medium">⏳ 等待處理中...</p>
-            </div>
-          )}
-
-          {upload.ocr_status === 'processing' && (
-            <div className="p-4 bg-blue-50 border border-blue-200 rounded-md">
-              <p className="text-blue-700 font-medium">🔄 正在提取菜單項目...</p>
-            </div>
-          )}
-
-          {upload.ocr_status === 'completed' && (
-            <div>
-              <div className="p-4 bg-green-50 border border-green-200 rounded-md mb-4">
-                <p className="text-green-700 font-medium">✅ 成功提取 {upload.items_count} 個菜單項目</p>
-              </div>
-
-              {/* Display menu items */}
-              {items.length > 0 && (
-                <div className="mt-4">
-                  <h3 className="text-lg font-semibold mb-3">提取的菜單項目：</h3>
-                  <div className="space-y-3">
-                    {items.map((item) => (
-                      <div
-                        key={item.item_id}
-                        className="border rounded-lg p-4 hover:shadow-md transition-shadow bg-gray-50"
+        {/* OCR Progress Section */}
+        {uploads.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6 }}
+          >
+            <Card className="mb-8 bg-white/10 backdrop-blur-lg border-white/20 shadow-2xl">
+              <CardHeader>
+                <CardTitle className="text-2xl text-white flex items-center gap-2">
+                  <span className="bg-blue-500 text-white rounded-full w-8 h-8 flex items-center justify-center text-sm">🔍</span>
+                  OCR 處理狀態
+                </CardTitle>
+                <CardDescription className="text-purple-200">
+                  AI 正在分析您的菜單
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {uploads.map((upload) => (
+                  <div key={upload.uploadId} className="mb-6 last:mb-0">
+                    <p className="text-sm font-medium text-white mb-3">{upload.file_name}</p>
+                    <MultiStepLoader
+                      loadingStates={loadingStates}
+                      loading={upload.ocr_status !== 'completed' && upload.ocr_status !== 'failed'}
+                      currentState={getCurrentLoadingState(upload.ocr_status)}
+                      duration={2000}
+                    />
+                    {upload.ocr_status === 'completed' && (
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="mt-4 p-4 bg-green-500/20 rounded-lg border border-green-500/30"
                       >
-                        <div className="flex justify-between items-start">
-                          <h4 className="font-bold text-lg">{item.item_name}</h4>
-                          <span className="text-lg font-semibold text-green-600">
-                            {item.price !== null ? `$${item.price.toFixed(2)}` : 'N/A'}
-                          </span>
-                        </div>
-
-                        {item.description && (
-                          <p className="text-sm text-gray-700 mt-2">{item.description}</p>
-                        )}
-
-                        {item.category && (
-                          <span className="inline-block mt-2 px-3 py-1 bg-blue-100 text-blue-700 text-xs rounded-full">
-                            {item.category}
-                          </span>
-                        )}
-
-                        {item.confidence_score !== null && (
-                          <p className="text-xs text-gray-500 mt-2">
-                            信心度: {(item.confidence_score * 100).toFixed(0)}%
-                          </p>
-                        )}
-
-                        {item.notes && (
-                          <p className="text-xs text-gray-500 italic mt-2">
-                            備註: {item.notes}
-                          </p>
-                        )}
-                      </div>
-                    ))}
+                        <p className="text-green-300 font-semibold">
+                          ✅ 完成！找到 {upload.items_count} 個菜單項目
+                        </p>
+                      </motion.div>
+                    )}
                   </div>
-                </div>
-              )}
-            </div>
-          )}
+                ))}
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
 
-          {upload.ocr_status === 'failed' && (
-            <div className="p-4 bg-red-50 border border-red-200 rounded-md">
-              <p className="text-red-700 font-medium">❌ 處理失敗</p>
-              {upload.ocr_error && (
-                <p className="text-sm text-red-600 mt-2">{upload.ocr_error}</p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+        {/* Menu Items Display */}
+        {allItems.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.2 }}
+          >
+            <Card className="bg-white/10 backdrop-blur-lg border-white/20 shadow-2xl">
+              <CardHeader>
+                <CardTitle className="text-2xl text-white flex items-center gap-2">
+                  <span className="text-3xl">🍽️</span>
+                  提取的菜單項目
+                </CardTitle>
+                <CardDescription className="text-purple-200">
+                  {allItems.length} 個項目
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <FocusCards cards={menuCards} />
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+      </div>
     </div>
   );
 };
 
 export default UploadPage;
-

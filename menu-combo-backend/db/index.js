@@ -238,6 +238,90 @@ export async function saveMenuItems(uploadId, items) {
 }
 
 /**
+ * Save recommendation to database
+ * @param {string} userId - User UUID
+ * @param {Array} uploadIds - Array of upload UUIDs
+ * @param {Array} recommendations - Array of recommendation objects
+ * @param {Object} preferences - User preferences used
+ * @returns {Promise<string>} recommendation_id
+ */
+export async function saveRecommendation(userId, uploadIds, recommendations, preferences) {
+  const pool = await getPool();
+
+  const result = await pool.query(
+    `INSERT INTO recommendations
+     (user_id, upload_ids, recommended_items, preferences)
+     VALUES ($1, $2, $3, $4)
+     RETURNING recommendation_id`,
+    [
+      userId,
+      JSON.stringify(uploadIds),
+      JSON.stringify(recommendations),
+      JSON.stringify(preferences)
+    ]
+  );
+
+  return result.rows[0].recommendation_id;
+}
+
+/**
+ * Get user's recommendation history
+ * @param {string} userId - User UUID
+ * @param {number} limit - Maximum number of results (default: 50)
+ * @returns {Promise<Array>} Array of recommendation records
+ */
+export async function getUserRecommendations(userId, limit = 50) {
+  const pool = await getPool();
+
+  const result = await pool.query(
+    `SELECT * FROM recommendations
+     WHERE user_id = $1
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [userId, limit]
+  );
+
+  return result.rows;
+}
+
+/**
+ * Get a single recommendation by ID
+ * @param {string} recommendationId - Recommendation UUID
+ * @param {string} userId - User UUID (for authorization)
+ * @returns {Promise<Object|null>} Recommendation record or null
+ */
+export async function getRecommendationById(recommendationId, userId) {
+  const pool = await getPool();
+
+  const result = await pool.query(
+    `SELECT * FROM recommendations
+     WHERE recommendation_id = $1 AND user_id = $2`,
+    [recommendationId, userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+/**
+ * Delete an upload and all associated data
+ * @param {string} uploadId - Upload UUID
+ * @param {string} userId - User UUID (for authorization)
+ * @returns {Promise<boolean>} True if deleted, false if not found
+ */
+export async function deleteUpload(uploadId, userId) {
+  const pool = await getPool();
+
+  const result = await pool.query(
+    `DELETE FROM uploads
+     WHERE upload_id = $1 AND user_id = $2
+     RETURNING upload_id`,
+    [uploadId, userId]
+  );
+
+  return result.rowCount > 0;
+}
+
+/**
  * Close the pool (for cleanup)
  */
 export async function closePool() {

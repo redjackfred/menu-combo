@@ -1,5 +1,5 @@
 import { extractTextWithCoordinates } from './textract.js';
-import { analyzeMenuWithClaude } from './bedrock.js';
+import { analyzeMenuWithOpenAI } from './openai.js';
 
 /**
  * Calculate minimum bounding box that encompasses all specified blocks
@@ -33,7 +33,7 @@ function calculateCombinedBbox(textractBlocks, blockIds) {
 }
 
 /**
- * Process menu image with Textract + Bedrock Claude
+ * Process menu image with Textract + OpenAI
  * @param {Buffer} imageBytes - Image binary data
  * @returns {Promise<Object>} { items: Array, textractBlocks: Array }
  */
@@ -47,10 +47,10 @@ export async function processMenuImage(imageBytes) {
     throw new Error('No text found in image');
   }
 
-  // Step 2: Analyze with Claude
-  console.log('Analyzing menu with Bedrock Claude...');
-  const menuData = await analyzeMenuWithClaude(imageBytes, textractBlocks);
-  console.log(`Claude identified ${menuData.items.length} menu items`);
+  // Step 2: Analyze with OpenAI
+  console.log('Analyzing menu with OpenAI...');
+  const menuData = await analyzeMenuWithOpenAI(imageBytes, textractBlocks);
+  console.log(`OpenAI identified ${menuData.items.length} menu items`);
 
   // Step 3: Enrich items with combined bounding boxes
   const enrichedItems = menuData.items.map(item => ({

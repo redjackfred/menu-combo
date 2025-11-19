@@ -1,16 +1,50 @@
-import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import OpenAI from 'openai';
+import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 
-// Reuse client across invocations for better performance
-const bedrockClient = new BedrockRuntimeClient({
-  region: process.env.AWS_REGION || 'us-east-1'
-});
+const sm = new SecretsManagerClient({ region: 'us-east-1' });
 
-const CLAUDE_MODEL_ID = process.env.BEDROCK_MODEL_ID || 'anthropic.claude-3-5-sonnet-20241022-v2:0';
+// Cache OpenAI client and API key
+let openaiClient = null;
+let cachedApiKey = null;
 
 /**
- * Build prompt for Claude to structure menu items from Textract blocks
+ * Get OpenAI API key from AWS Secrets Manager
+ */
+async function getOpenAiApiKey() {
+  if (cachedApiKey) {
+    return cachedApiKey;
+  }
+
+  const secretArn = process.env.CLAUDE_API_KEY || 'menu-claude-api-key';
+  const secretResponse = await sm.send(new GetSecretValueCommand({ SecretId: secretArn }));
+
+  if (!secretResponse.SecretString) {
+    throw new Error('OpenAI API key secret is empty');
+  }
+
+  cachedApiKey = secretResponse.SecretString;
+  return cachedApiKey;
+}
+
+/**
+ * Get or create OpenAI client
+ */
+async function getOpenAiClient() {
+  if (openaiClient) {
+    return openaiClient;
+  }
+
+  const apiKey = await getOpenAiApiKey();
+  openaiClient = new OpenAI({ apiKey });
+  return openaiClient;
+}
+
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
+
+/**
+ * Build prompt for AI to structure menu items from Textract blocks
  * @param {Array} textractBlocks - Blocks from Textract
- * @returns {string} Prompt for Claude
+ * @returns {string} Prompt for AI analysis
  */
 function buildMenuAnalysisPrompt(textractBlocks) {
   return `You are a professional menu analysis assistant. I used AWS Textract to extract text and coordinates from a menu image.
@@ -47,17 +81,24 @@ ${JSON.stringify(textractBlocks, null, 2)}
 - Confidence based on text clarity and information completeness
 - Try to identify all items, don't miss any
 - Handle edge cases: empty menus, non-menu images, unclear text
-- All items MUST have a "name" field (required)`;
+- All items MUST have a "name" field (required)
+
+**IMPORTANT - blockIds selection**:
+- blockIds should ONLY include the text blocks that contain the item's NAME and PRICE
+- DO NOT include block IDs for descriptions, category labels, section headers, or other supplementary text
+- The bounding box will be drawn around these blocks, so only include the essential identifying information
+- Example: If a menu item has blocks [0: "Burger", 1: "A delicious beef burger", 2: "$12.99"],
+  only include blockIds: [0, 2] (name and price), NOT [0, 1, 2]`;
 }
 
 /**
- * Extract JSON from Claude's response, handling markdown code blocks
- * @param {string} text - Claude's response text
+ * Extract JSON from AI response, handling markdown code blocks
+ * @param {string} text - AI response text
  * @returns {Object} Parsed JSON object
  * @throws {Error} If JSON parsing fails
  */
 function extractJsonFromResponse(text) {
-  console.log('Extracting JSON from Claude response...');
+  console.log('Extracting JSON from AI response...');
 
   // Try to extract JSON from markdown code blocks (```json or ```)
   const codeBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
@@ -112,14 +153,14 @@ function validateMenuItem(item, index) {
 }
 
 /**
- * Analyze menu image and Textract results using Bedrock Claude
+ * Analyze menu image and Textract results using OpenAI
  * @param {Buffer} imageBytes - Image binary data
  * @param {Array} textractBlocks - Text blocks from Textract
  * @param {string} imageFormat - Image MIME type (default: 'image/jpeg')
  * @returns {Promise<Object>} Structured menu data with items array
- * @throws {Error} If validation fails or Bedrock API fails
+ * @throws {Error} If validation fails or OpenAI API fails
  */
-export async function analyzeMenuWithClaude(imageBytes, textractBlocks, imageFormat = 'image/jpeg') {
+export async function analyzeMenuWithOpenAI(imageBytes, textractBlocks, imageFormat = 'image/jpeg') {
   // Input validation
   if (!imageBytes || !Buffer.isBuffer(imageBytes) || imageBytes.length === 0) {
     throw new Error('Invalid image bytes: must be a non-empty Buffer');
@@ -129,24 +170,28 @@ export async function analyzeMenuWithClaude(imageBytes, textractBlocks, imageFor
     throw new Error('Invalid textractBlocks: must be a non-empty array');
   }
 
-  console.log(`Starting Bedrock Claude analysis with ${textractBlocks.length} Textract blocks`);
+  console.log(`Starting OpenAI analysis with ${textractBlocks.length} Textract blocks`);
 
   try {
+    const openai = await getOpenAiClient();
     const prompt = buildMenuAnalysisPrompt(textractBlocks);
 
-    const claudeRequest = {
-      anthropic_version: 'bedrock-2023-05-31',
+    // Convert image to base64 data URL
+    const base64Image = imageBytes.toString('base64');
+    const dataUrl = `data:${imageFormat};base64,${base64Image}`;
+
+    console.log(`Invoking OpenAI model: ${OPENAI_MODEL}`);
+    const response = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
       max_tokens: 4096,
       messages: [
         {
           role: 'user',
           content: [
             {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: imageFormat,
-                data: imageBytes.toString('base64')
+              type: 'image_url',
+              image_url: {
+                url: dataUrl
               }
             },
             {
@@ -156,33 +201,24 @@ export async function analyzeMenuWithClaude(imageBytes, textractBlocks, imageFor
           ]
         }
       ]
-    };
-
-    console.log(`Invoking Bedrock model: ${CLAUDE_MODEL_ID}`);
-    const command = new InvokeModelCommand({
-      modelId: CLAUDE_MODEL_ID,
-      body: JSON.stringify(claudeRequest)
     });
 
-    const response = await bedrockClient.send(command);
-    const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+    console.log('OpenAI response received, parsing content...');
 
-    console.log('Bedrock response received, parsing content...');
-
-    // Extract JSON from Claude's response (handle markdown code blocks)
-    const responseText = responseBody.content[0].text;
+    // Extract JSON from OpenAI's response (handle markdown code blocks)
+    const responseText = response.choices[0].message.content;
     const menuData = extractJsonFromResponse(responseText);
 
     // Validate response structure
     if (!menuData.items || !Array.isArray(menuData.items)) {
-      throw new Error('Invalid response format from Claude: missing or invalid "items" array');
+      throw new Error('Invalid response format from OpenAI: missing or invalid "items" array');
     }
 
     if (menuData.items.length === 0) {
-      console.warn('Claude returned zero menu items');
+      console.warn('OpenAI returned zero menu items');
     }
 
-    console.log(`Claude identified ${menuData.items.length} menu items, validating...`);
+    console.log(`OpenAI identified ${menuData.items.length} menu items, validating...`);
 
     // Validate each menu item
     menuData.items.forEach((item, index) => {
@@ -193,20 +229,20 @@ export async function analyzeMenuWithClaude(imageBytes, textractBlocks, imageFor
 
     return menuData;
   } catch (error) {
-    console.error('Bedrock Claude analysis failed:', error);
+    console.error('OpenAI analysis failed:', error);
 
-    // Handle specific Bedrock errors
-    if (error.name === 'ThrottlingException') {
-      throw new Error('Bedrock rate limit exceeded - please retry later');
+    // Handle specific OpenAI errors
+    if (error.status === 429) {
+      throw new Error('OpenAI rate limit exceeded - please retry later');
     }
-    if (error.name === 'ModelNotReadyException') {
-      throw new Error('Bedrock model is not ready - please retry later');
+    if (error.status === 401) {
+      throw new Error('OpenAI authentication failed - invalid API key');
     }
-    if (error.name === 'ValidationException') {
-      throw new Error(`Bedrock validation error: ${error.message}`);
+    if (error.status === 400) {
+      throw new Error(`OpenAI validation error: ${error.message}`);
     }
 
     // Re-throw with context
-    throw new Error(`Bedrock failed: ${error.message}`);
+    throw new Error(`OpenAI failed: ${error.message}`);
   }
 }

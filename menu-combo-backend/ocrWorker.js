@@ -47,7 +47,7 @@ export const handler = async (event) => {
       const imageBytes = await downloadImageFromS3(s3Key);
       console.log(`Downloaded ${imageBytes.length} bytes`);
 
-      // Step 3: Process with Textract + Bedrock
+      // Step 3: Process with Textract + OpenAI
       const { items } = await processMenuImage(imageBytes);
 
       if (items.length === 0) {

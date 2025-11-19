@@ -16,6 +16,7 @@ provider:
     DB_SECRET_ARN: arn:aws:secretsmanager:us-east-1:024848456604:secret:menu-db-dZh6zJ
     CLAUDE_API_KEY: arn:aws:secretsmanager:us-east-1:024848456604:secret:menu-claude-api-key-PtNVh4
     SQS_QUEUE_URL: !Ref MenuOcrQueue
+    OPENAI_MODEL: gpt-4o-mini  # Faster and cheaper than gpt-4o
   httpApi:
     cors:
       allowedOrigins:
@@ -60,11 +61,6 @@ provider:
             - textract:DetectDocumentText
           Resource: '*'
 
-        - Effect: Allow
-          Action:
-            - bedrock:InvokeModel
-          Resource: arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0
-
 functions:
   api:
     handler: handler.handler
@@ -80,31 +76,15 @@ functions:
   ocrWorker:
     handler: ocrWorker.handler
     timeout: 300  # 5 minutes
-    memorySize: 2048  # More memory for image processing
+    memorySize: 3008  # Increased for faster processing (more CPU)
     events:
       - sqs:
           arn: !GetAtt MenuOcrQueue.Arn
           batchSize: 1
-          maximumBatchingWindowInSeconds: 0
+          maximumConcurrency: 10  # SQS can trigger up to 10 Lambda instances in parallel
 
 resources:
   Resources:
-    MenuComboUploads:
-      Type: AWS::S3::Bucket
-      Properties:
-        BucketName: menu-combo-uploads
-        CorsConfiguration:
-          CorsRules:
-            - AllowedOrigins:
-                - http://localhost:5173
-                - https://menu-combo.peiwen.dev
-              AllowedMethods:
-                - GET
-                - PUT
-                - POST
-              AllowedHeaders:
-                - '*'
-
     MenuOcrQueue:
       Type: AWS::SQS::Queue
       Properties:
