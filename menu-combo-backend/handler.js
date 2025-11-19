@@ -58,31 +58,6 @@ app.get("/init-db", async (req, res) => {
   }
 });
 
-// --- SecretsManager test ---
-app.get("/testsecret", async (req, res) => {
-  try {
-    const dbSecretArn = process.env.DB_SECRET_ARN || "menu-db";
-    const claudeSecretArn = process.env.CLAUDE_API_KEY || "menu-claude-api-key";
-
-    const [dbSecret, claudeSecret] = await Promise.all([
-      sm.send(new GetSecretValueCommand({ SecretId: dbSecretArn })),
-      sm.send(new GetSecretValueCommand({ SecretId: claudeSecretArn })),
-    ]);
-
-    const dbConfig = JSON.parse(dbSecret.SecretString);
-    const claudeKey = JSON.parse(claudeSecret.SecretString).api_key;
-
-    res.status(200).json({
-      message: "Secrets fetched successfully",
-      dbHost: dbConfig.host,
-      claudeKeySample: claudeKey.slice(0, 6) + "...",
-    });
-  } catch (err) {
-    console.error("Error fetching secrets:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // --- Upload route (Protected) - Supports multiple files (max 5) ---
 app.post("/upload", verifyToken, async (req, res) => {
   try {
@@ -539,71 +514,6 @@ app.get('/recommendations/:recommendationId', verifyToken, async (req, res) => {
   } catch (error) {
     console.error('Error fetching recommendation:', error);
     res.status(500).json({ error: 'Failed to fetch recommendation', details: error.message });
-  }
-});
-
-// --- Test DB connection ---
-app.get("/testdb", async (req, res) => {
-  try {
-    const dbSecretArn = process.env.DB_SECRET_ARN || "menu-db";
-
-    // Fetch DB secret
-    const secretResponse = await sm.send(new GetSecretValueCommand({ SecretId: dbSecretArn }));
-    if (!secretResponse.SecretString) throw new Error("SecretString is empty");
-    const dbSecret = JSON.parse(secretResponse.SecretString);
-
-    // First, connect to default 'postgres' database to create our database if needed
-    const adminClient = new Client({
-      host: dbSecret.host,
-      user: dbSecret.username,
-      password: dbSecret.password,
-      database: "postgres", // Connect to default database
-      port: dbSecret.port,
-      ssl: { rejectUnauthorized: false },
-      connectionTimeoutMillis: 5000,
-    });
-
-    await adminClient.connect();
-
-    // Check if our database exists, create if not
-    const dbCheckResult = await adminClient.query(
-      "SELECT 1 FROM pg_database WHERE datname = $1",
-      [dbSecret.dbname]
-    );
-
-    if (dbCheckResult.rows.length === 0) {
-      console.log(`Creating database: ${dbSecret.dbname}`);
-      await adminClient.query(`CREATE DATABASE "${dbSecret.dbname}"`);
-    }
-
-    await adminClient.end();
-
-    // Now connect to our application database
-    const client = new Client({
-      host: dbSecret.host,
-      user: dbSecret.username,
-      password: dbSecret.password,
-      database: dbSecret.dbname,
-      port: dbSecret.port,
-      ssl: { rejectUnauthorized: false },
-      connectionTimeoutMillis: 5000,
-    });
-
-    await client.connect();
-
-    // Simple query
-    const result = await client.query("SELECT NOW() as current_time");
-    await client.end();
-
-    res.status(200).json({
-      message: "Successfully connected to PostgreSQL!",
-      time: result.rows[0].current_time,
-      host: dbSecret.host,
-      database: dbSecret.dbname,
-    });
-  } catch (err) {
-    console.error("Database connection error:", err);
-    res.status(500).json({ error: "Failed to connect to database", details: err.message });
   }
 });
 

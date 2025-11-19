@@ -1,7 +1,5 @@
 import { useState, useEffect } from "react";
 import UploadPage from "./components/UploadPage";
-import TestSecretPage from "./components/TestSecretPage";
-import TestDbPage from "./components/TestDbPage";
 import RecommendationPage from "./components/RecommendationPage";
 import RecommendationHistoryPage from "./components/RecommendationHistoryPage";
 import UploadHistoryPage from "./components/UploadHistoryPage";
@@ -16,7 +14,7 @@ import { WavyBackground } from "@/components/ui/wavy-background";
 import { BackgroundGradient } from "@/components/ui/background-gradient";
 
 function App() {
-  const [page, setPage] = useState<"home" | "upload" | "testsecret" | "testdb" | "recommend" | "history" | "uploads-history">("home");
+  const [page, setPage] = useState<"home" | "upload" | "recommend" | "history" | "uploads-history">("home");
   const auth = useAuth();
 
   const Uri = import.meta.env.PROD
@@ -500,29 +498,6 @@ function App() {
                     </div>
                   </CardContent>
                 </Card>
-
-                <Card className="bg-gray-800/50 border-gray-700 text-gray-300">
-                  <CardHeader>
-                    <CardTitle className="text-white">Developer Tools</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      <button
-                        onClick={() => setPage("testdb")}
-                        className="block text-sm hover:text-white transition-colors w-full text-left hover:translate-x-1 duration-200"
-                      >
-                        → Test DB
-                      </button>
-                      <Separator className="bg-gray-700" />
-                      <button
-                        onClick={() => setPage("testsecret")}
-                        className="block text-sm hover:text-white transition-colors w-full text-left hover:translate-x-1 duration-200"
-                      >
-                        → Test Secret
-                      </button>
-                    </div>
-                  </CardContent>
-                </Card>
               </div>
 
               <Separator className="bg-gray-800 mb-8" />
@@ -546,34 +521,6 @@ function App() {
       )}
 
       {page === "upload" && <UploadPage onBackToHome={() => setPage("home")} />}
-
-      {page === "testsecret" && (
-        <div className="min-h-screen bg-gray-50 p-4">
-          <div className="max-w-md mx-auto mt-4">
-            <Button
-              onClick={() => setPage("home")}
-              className="mb-6 bg-gray-300 hover:bg-gray-400 text-black"
-            >
-              ← Back to Home
-            </Button>
-            <TestSecretPage />
-          </div>
-        </div>
-      )}
-
-      {page === "testdb" && (
-        <div className="min-h-screen bg-gray-50 p-4">
-          <div className="max-w-md mx-auto mt-4">
-            <Button
-              onClick={() => setPage("home")}
-              className="mb-6 bg-gray-300 hover:bg-gray-400 text-black"
-            >
-              ← Back to Home
-            </Button>
-            <TestDbPage />
-          </div>
-        </div>
-      )}
 
       {page === "recommend" && <RecommendationPage onBackToHome={() => setPage("home")} />}
 
